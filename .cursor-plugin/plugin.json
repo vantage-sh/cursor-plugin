@@ -1,7 +1,7 @@
 {
   "name": "vantage",
   "version": "1.0.0",
-  "description": "Enables AI assistants to query cloud costs, manage cost reports, budgets, alerts, and recommendations across your Vantage workspace",
+  "description": "Query cloud costs, manage cost reports, budgets, alerts, and recommendations across your Vantage workspace",
   "author": {
     "name": "Vantage",
     "email": "support@vantage.sh",
