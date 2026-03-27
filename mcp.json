@@ -1,0 +1,6 @@
+{
+  "vantage": {
+    "url": "https://mcp.vantage.sh/mcp",
+    "transport": "http"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "vantage",
+  "version": "1.0.0",
+  "description": "Enables AI assistants to query cloud costs, manage cost reports, budgets, alerts, and recommendations across your Vantage workspace",
+  "author": {
+    "name": "Vantage",
+    "email": "support@vantage.sh",
+    "url": "https://vantage.sh"
+  },
+  "keywords": ["vantage", "mcp", "cloud costs", "finops", "cost management", "cost visibility", "cost optimization", "cost recommendations"],
+  "logo": "logo.svg",
+  "primaryColor": "#6742D6"
+}
