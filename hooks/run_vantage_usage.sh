@@ -1,6 +1,11 @@
 #!/bin/sh
 # Runs the Vantage usage hook with Python 3. Without Python 3, it answers Cursor
 # and does nothing, so the agent is never blocked.
+#
+# $1 is the team's VANTAGE_TELEMETRY_TOKEN plugin variable. It is empty, or the
+# unexpanded placeholder, when no admin has set one; the hook ignores both.
+VANTAGE_CURSOR_TEAM_TOKEN="${1:-}"
+export VANTAGE_CURSOR_TEAM_TOKEN
 
 python_path="${VANTAGE_CURSOR_PYTHON:-}"
 if [ -z "$python_path" ]; then

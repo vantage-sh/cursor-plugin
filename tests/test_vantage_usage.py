@@ -136,6 +136,21 @@ class BuildRequestTest(HookTestCase):
 
 
 class CredentialsTest(HookTestCase):
+    def test_team_plugin_token_wins_over_environment_and_file(self):
+        self.write_config({"token": "file-token"})
+        env = dict(self.env, VANTAGE_CURSOR_TEAM_TOKEN="team-token", VANTAGE_CURSOR_INGEST_TOKEN="env-token")
+
+        token, endpoint, _config, source = hook.credentials(env)
+
+        self.assertEqual((token, endpoint, source), ("team-token", hook.DEFAULT_ENDPOINT, "team"))
+
+    def test_ignores_unset_team_variable(self):
+        self.write_config({"token": "file-token"})
+
+        for value in ("", "   ", "${VANTAGE_TELEMETRY_TOKEN}", "${user_config.VANTAGE_TELEMETRY_TOKEN}"):
+            env = dict(self.env, VANTAGE_CURSOR_TEAM_TOKEN=value)
+            self.assertEqual(hook.credentials(env)[3], "file", value)
+
     def test_environment_wins_over_saved_file(self):
         self.write_config({"token": "file-token", "endpoint": "https://file.example"})
         env = dict(self.env, VANTAGE_CURSOR_INGEST_TOKEN="env-token")
@@ -200,6 +215,45 @@ class MainTest(HookTestCase):
 
         self.assertEqual(hook.main(stdin=io.StringIO("not json"), stdout=stdout, stderr=io.StringIO(), env=self.env), 0)
         self.assertEqual(stdout.getvalue(), "{}\n")
+
+    def test_records_source_and_result_without_the_token(self):
+        with FakeServer(default=(401, {})) as server:
+            env = dict(self.env, VANTAGE_CURSOR_TEAM_TOKEN="vntg_ti_team", VANTAGE_CURSOR_INGEST_ENDPOINT=server.url)
+            self.run_main(payload(), env)
+
+        with open(os.path.join(self.env["VANTAGE_CURSOR_USAGE_STATE_DIR"], "status.json")) as handle:
+            recorded = json.load(handle)
+
+        self.assertEqual((recorded["source"], recorded["result"]), ("team", 401))
+        self.assertNotIn("vntg_ti_team", json.dumps(recorded))
+
+    def run_hook_command(self, env):
+        with open(os.path.join(ROOT, "hooks", "hooks.json")) as handle:
+            command = json.load(handle)["hooks"]["afterAgentResponse"][0]["command"]
+        return subprocess.run(
+            ["sh", "-c", command],
+            cwd=ROOT,
+            input=json.dumps(payload()).encode("utf-8"),
+            env=env,
+            capture_output=True,
+            check=True,
+        )
+
+    def test_hook_command_passes_the_team_variable_to_the_hook(self):
+        with FakeServer() as server:
+            env = dict(self.env, VANTAGE_TELEMETRY_TOKEN="vntg_ti_team", VANTAGE_CURSOR_INGEST_ENDPOINT=server.url)
+            completed = self.run_hook_command(env)
+
+        self.assertEqual(completed.stdout, b"{}\n")
+        self.assertEqual(server.requests[0]["headers"]["Authorization"], "Bearer vntg_ti_team")
+
+    def test_hook_command_falls_back_when_the_team_variable_is_unset(self):
+        with FakeServer() as server:
+            self.write_config({"token": "vntg_ti_personal", "endpoint": server.url})
+            completed = self.run_hook_command(self.env)
+
+        self.assertEqual(completed.stdout, b"{}\n")
+        self.assertEqual(server.requests[0]["headers"]["Authorization"], "Bearer vntg_ti_personal")
 
     def test_shell_wrapper_answers_cursor(self):
         completed = subprocess.run(

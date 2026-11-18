@@ -9,5 +9,15 @@
   },
   "keywords": ["vantage", "mcp", "cloud costs", "finops", "cost management", "cost visibility", "cost optimization", "cost recommendations", "ai reports", "telemetry"],
   "logo": "logo.svg",
-  "primaryColor": "#6742D6"
+  "primaryColor": "#6742D6",
+  "variables": {
+    "type": "object",
+    "properties": {
+      "VANTAGE_TELEMETRY_TOKEN": {
+        "type": "string",
+        "title": "Vantage telemetry token",
+        "description": "Optional. Create it in Vantage under Settings > Integrations > Cursor Telemetry. When set, every developer with the plugin sends agent usage to Vantage AI Reports without signing in. The Vantage MCP still uses each developer's own Vantage sign-in."
+      }
+    }
+  }
 }

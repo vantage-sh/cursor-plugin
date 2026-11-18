@@ -180,10 +180,52 @@ def masked(token):
     return "ending in %s" % token[-4:] if len(token) > 8 else "(hidden)"
 
 
+def hook_status(env=os.environ):
+    """Return the usage hook's last send ({source, result, at}), or None."""
+    directory = env.get("VANTAGE_CURSOR_USAGE_STATE_DIR") or os.path.join(tempfile.gettempdir(), "vantage-cursor-usage")
+    try:
+        with open(os.path.join(directory, "status.json"), encoding="utf-8") as handle:
+            recorded = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(recorded, dict) or not isinstance(recorded.get("at"), int):
+        return None
+    return recorded
+
+
+def accepted(recorded):
+    return isinstance(recorded.get("result"), int) and 200 <= recorded["result"] < 300
+
+
+def describe_hook_status(recorded, now=None):
+    minutes = max(0, int(((now if now is not None else time.time()) - recorded["at"]) // 60))
+    when = "just now" if minutes < 1 else "%d minute%s ago" % (minutes, "" if minutes == 1 else "s")
+    result = recorded.get("result")
+    if accepted(recorded):
+        return "The last agent reply was sent %s and Vantage accepted it." % when
+    if result in (401, 403):
+        return "The last agent reply was sent %s and Vantage rejected the token. It may have been revoked." % when
+    if result == "unreachable":
+        return "The last agent reply was sent %s but Vantage could not be reached." % when
+    return "The last agent reply was sent %s and Vantage responded %s." % (when, result)
+
+
+def team_configured(env=os.environ):
+    recorded = hook_status(env)
+    return recorded if recorded and recorded.get("source") == "team" else None
+
+
 def status(env=os.environ, out=sys.stdout):
     token, endpoint, source = active_credentials(env)
     if not token:
-        out.write("Vantage telemetry is not set up on this computer. Ask the agent to set up Vantage telemetry.\n")
+        recorded = team_configured(env)
+        if recorded:
+            out.write("Your Cursor team admin set a Vantage telemetry token for the Vantage plugin.\n")
+            out.write(describe_hook_status(recorded) + "\n")
+            return 0 if accepted(recorded) else 1
+        out.write("Vantage telemetry is not set up on this computer. If your Cursor team admin set a Vantage ")
+        out.write("telemetry token for the plugin, send one agent message and check again. ")
+        out.write("Otherwise, ask the agent to set up Vantage telemetry.\n")
         return 1
     out.write("Telemetry token %s, from %s.\n" % (masked(token), source))
     out.write("Sending to %s.\n" % endpoint)
@@ -203,6 +245,9 @@ def remove(env=os.environ, out=sys.stdout):
         out.write("Revoke it in Vantage under Settings > Integrations > Cursor Telemetry if it is no longer needed.\n")
     else:
         out.write("No saved Vantage telemetry token was found.\n")
+    if team_configured(env):
+        out.write("Your Cursor team admin set a Vantage telemetry token for the plugin, so telemetry keeps sending. ")
+        out.write("Your admin manages that in the Cursor dashboard.\n")
     if env.get("VANTAGE_CURSOR_INGEST_TOKEN", "").strip():
         out.write("VANTAGE_CURSOR_INGEST_TOKEN is still set in the environment, so telemetry keeps sending. ")
         out.write("Your administrator manages that setting.\n")
@@ -214,6 +259,12 @@ def setup(env=os.environ, out=sys.stdout, force=False, open_browser=webbrowser.o
     if token and not force:
         out.write("Vantage telemetry is already set up (from %s). Checking it now.\n" % source)
         return status(env, out)
+    recorded = team_configured(env)
+    if recorded and accepted(recorded) and not force:
+        out.write("Your Cursor team admin already set a Vantage telemetry token for the plugin, ")
+        out.write("so no sign-in is needed.\n")
+        out.write(describe_hook_status(recorded) + "\n")
+        return 0
 
     urls = endpoints(env)
     verifier, challenge = pkce_pair()

@@ -6,8 +6,11 @@ It never reads or sends prompt or response text. Cloud Agent payloads omit
 token counts, so they are skipped. The hook always prints "{}" and exits 0 so
 a failed send never blocks the agent. It uses only the Python standard library.
 
-Credentials come from VANTAGE_CURSOR_INGEST_TOKEN (with an optional
-VANTAGE_CURSOR_INGEST_ENDPOINT), or from the file the setup skill writes.
+Credentials come, in order, from the team's VANTAGE_TELEMETRY_TOKEN plugin
+variable (passed in as VANTAGE_CURSOR_TEAM_TOKEN), VANTAGE_CURSOR_INGEST_TOKEN
+set by device management, or the file the setup skill writes. Each send records
+its credential source and result, never the token, so the setup skill can
+report whether telemetry works.
 """
 
 import json
@@ -70,21 +73,45 @@ def read_config(env=os.environ):
     return config if isinstance(config, dict) else {}
 
 
+def team_token(env=os.environ):
+    token = env.get("VANTAGE_CURSOR_TEAM_TOKEN", "").strip()
+    if not token or "${" in token or any(character.isspace() for character in token):
+        return None
+    return token
+
+
 def credentials(env=os.environ):
-    """Return (token, endpoint, config); the environment wins over the setup file."""
+    """Return (token, endpoint, config, source).
+
+    Admin-managed tokens win over a developer's own sign-in: the team plugin
+    variable first, then the device-management environment, then the file.
+    """
     config = read_config(env)
+    environment_endpoint = env.get("VANTAGE_CURSOR_INGEST_ENDPOINT", "").strip() or DEFAULT_ENDPOINT
+
+    token = team_token(env)
+    if token:
+        return token, environment_endpoint, config, "team"
+
     token = env.get("VANTAGE_CURSOR_INGEST_TOKEN", "").strip()
     if token:
-        endpoint = env.get("VANTAGE_CURSOR_INGEST_ENDPOINT", "").strip() or DEFAULT_ENDPOINT
-        return token, endpoint, config
+        return token, environment_endpoint, config, "environment"
 
     token = config.get("token")
     if not isinstance(token, str) or not token.strip():
-        return None, None, config
+        return None, None, config, None
     endpoint = config.get("endpoint")
     if not isinstance(endpoint, str) or not endpoint.strip():
         endpoint = DEFAULT_ENDPOINT
-    return token.strip(), endpoint.strip(), config
+    return token.strip(), endpoint.strip(), config, "file"
+
+
+def record_status(env, source, result):
+    def update(current):
+        current.clear()
+        current.update({"source": source, "result": result, "at": int(time.time())})
+
+    update_state(env, "status.json", update)
 
 
 def ticket_pattern(env, config):
@@ -503,17 +530,21 @@ def deliver(body, token, endpoint):
 def handle(payload, env=os.environ, stderr=sys.stderr):
     if not isinstance(payload, dict) or is_cloud_agent(payload):
         return None
-    token, endpoint, config = credentials(env)
+    token, endpoint, config, source = credentials(env)
     if not token:
         return None
     body = build_request(payload, env=env, config=config)
     if body is None:
         return None
     try:
-        return deliver(body, token, endpoint)
+        status = deliver(body, token, endpoint)
+        record_status(env, source, status)
+        return status
     except urllib.error.HTTPError as error:
+        record_status(env, source, error.code)
         stderr.write("[vantage_usage] ingest responded %s\n" % error.code)
     except (OSError, ValueError) as error:
+        record_status(env, source, "unreachable")
         stderr.write("[vantage_usage] %s: %s\n" % (type(error).__name__, error))
     return None
 

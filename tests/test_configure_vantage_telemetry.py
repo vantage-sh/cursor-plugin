@@ -17,7 +17,10 @@ hook = load("vantage_usage_for_configure", "hooks/vantage_usage.py")
 class ConfigureTestCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.env = {"VANTAGE_CURSOR_TELEMETRY_CONFIG": os.path.join(self.tmp.name, "vantage", "cursor-telemetry.json")}
+        self.env = {
+            "VANTAGE_CURSOR_TELEMETRY_CONFIG": os.path.join(self.tmp.name, "vantage", "cursor-telemetry.json"),
+            "VANTAGE_CURSOR_USAGE_STATE_DIR": os.path.join(self.tmp.name, "state"),
+        }
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -90,6 +93,49 @@ class WaitForTokenTest(ConfigureTestCase):
         with FakeServer(default=(202, {})) as server:
             with self.assertRaisesRegex(configure.SetupError, "Timed out"):
                 configure.wait_for_ingest_token(server.url, "v", sleep=lambda _s: None, clock=lambda: next(times))
+
+
+class TeamTokenTest(ConfigureTestCase):
+    def record(self, result, source="team"):
+        os.makedirs(self.env["VANTAGE_CURSOR_USAGE_STATE_DIR"], exist_ok=True)
+        with open(os.path.join(self.env["VANTAGE_CURSOR_USAGE_STATE_DIR"], "status.json"), "w") as handle:
+            json.dump({"source": source, "result": result, "at": int(__import__("time").time())}, handle)
+
+    def test_status_reports_a_working_team_token(self):
+        self.record(200)
+        out = io.StringIO()
+
+        self.assertEqual(configure.status(self.env, out), 0)
+        self.assertIn("team admin set a Vantage telemetry token", out.getvalue())
+        self.assertIn("Vantage accepted it", out.getvalue())
+
+    def test_status_reports_a_revoked_team_token(self):
+        self.record(401)
+        out = io.StringIO()
+
+        self.assertEqual(configure.status(self.env, out), 1)
+        self.assertIn("rejected the token", out.getvalue())
+
+    def test_setup_skips_sign_in_when_the_team_token_works(self):
+        self.record(200)
+        out = io.StringIO()
+
+        self.assertEqual(configure.setup(self.env, out, open_browser=self.fail, wait=self.fail), 0)
+        self.assertIn("no sign-in is needed", out.getvalue())
+
+    def test_setup_signs_in_when_only_a_personal_send_was_recorded(self):
+        self.record(200, source="file")
+        opened = []
+
+        with self.assertRaises(configure.SetupError):
+            configure.setup(
+                dict(self.env, VANTAGE_CURSOR_INGEST_ENDPOINT="http://127.0.0.1:9"),
+                io.StringIO(),
+                open_browser=opened.append,
+                wait=lambda _url, _verifier: "vntg_ti_new",
+            )
+
+        self.assertEqual(len(opened), 1)
 
 
 class StatusAndRemoveTest(ConfigureTestCase):
