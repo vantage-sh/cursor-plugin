@@ -59,6 +59,8 @@ When more than one is set, the hook uses the team plugin token first, then these
 
 Run the tests with `bin/test`.
 
+To try the plugin in Cursor, copy this folder (without `.git`) to `~/.cursor/plugins/local/vantage` and run **Developer: Reload Window**. Uninstall the marketplace copy first, because it takes precedence. To see what the hook sends without a Vantage account, run `bin/fake-ingest` and start Cursor with `VANTAGE_CURSOR_INGEST_ENDPOINT=http://127.0.0.1:4318`.
+
 ## Support
 
 - **Vantage Documentation:** https://docs.vantage.sh
