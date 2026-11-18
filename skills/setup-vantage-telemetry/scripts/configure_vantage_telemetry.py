@@ -24,7 +24,7 @@ DEFAULT_AUTHORIZATION_ENDPOINT = "https://console.vantage.sh/cursor/telemetry/au
 DEFAULT_CLAIM_ENDPOINT = "https://api.vantage.sh/plugins/cursor_telemetry_setup/claim"
 DEFAULT_INGEST_ENDPOINT = "https://ingest.vantage.sh"
 LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
-# Cloudflare rejects urllib's default User-Agent with error 1010.
+# The ingest endpoint rejects urllib's default User-Agent.
 USER_AGENT = "vantage-cursor-plugin/1.1.0"
 SIGN_IN_TIMEOUT = 600
 REQUEST_TIMEOUT = 15

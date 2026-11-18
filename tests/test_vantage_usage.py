@@ -58,7 +58,7 @@ class HookTestCase(unittest.TestCase):
 
 
 class BuildRequestTest(HookTestCase):
-    def test_builds_core_compatible_log_without_response_text(self):
+    def test_builds_log_without_response_text(self):
         body = hook.build_request(payload(), env=self.env, now=1_700_000_000)
 
         resource_logs = body["resourceLogs"][0]
@@ -97,7 +97,7 @@ class BuildRequestTest(HookTestCase):
         self.assertIsNone(hook.build_request(payload(), env=self.env))
         self.assertIsNotNone(hook.build_request(payload(generation_id="gen-2"), env=self.env))
 
-    def test_respects_generations_recorded_by_the_core_project_hook(self):
+    def test_respects_generations_already_recorded(self):
         os.makedirs(self.env["VANTAGE_CURSOR_USAGE_STATE_DIR"])
         with open(os.path.join(self.env["VANTAGE_CURSOR_USAGE_STATE_DIR"], "sent.json"), "w") as handle:
             json.dump({"gen-1": int(__import__("time").time())}, handle)

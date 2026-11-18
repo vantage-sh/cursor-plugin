@@ -34,7 +34,7 @@ except ImportError:
 
 SCHEMA_VERSION = "1"
 PLUGIN_VERSION = "1.1.0"
-# Cloudflare rejects urllib's default User-Agent with error 1010.
+# The ingest endpoint rejects urllib's default User-Agent.
 USER_AGENT = "vantage-cursor-plugin/%s" % PLUGIN_VERSION
 EVENT_NAME = "cursor.agent.turn"
 DEFAULT_ENDPOINT = "https://ingest.vantage.sh"
