@@ -49,6 +49,7 @@ class SetupTest(ConfigureTestCase):
         self.assertEqual(query["code_challenge_method"], ["S256"])
         self.assertEqual([request["path"] for request in server.requests][-1], "/v1/logs")
         self.assertEqual(server.requests[-1]["headers"]["Authorization"], "Bearer vntg_ti_new")
+        self.assertEqual(server.requests[-1]["headers"]["User-Agent"], hook.USER_AGENT)
         self.assertEqual(server.requests[-1]["body"], {"resourceLogs": []})
 
         path = self.env["VANTAGE_CURSOR_TELEMETRY_CONFIG"]

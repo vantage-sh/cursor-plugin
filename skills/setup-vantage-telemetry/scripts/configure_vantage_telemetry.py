@@ -24,6 +24,8 @@ DEFAULT_AUTHORIZATION_ENDPOINT = "https://console.vantage.sh/cursor/telemetry/au
 DEFAULT_CLAIM_ENDPOINT = "https://api.vantage.sh/plugins/cursor_telemetry_setup/claim"
 DEFAULT_INGEST_ENDPOINT = "https://ingest.vantage.sh"
 LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
+# Cloudflare rejects urllib's default User-Agent with error 1010.
+USER_AGENT = "vantage-cursor-plugin/1.1.0"
 SIGN_IN_TIMEOUT = 600
 REQUEST_TIMEOUT = 15
 
@@ -107,7 +109,10 @@ def post_json(url, body, headers=None, timeout=REQUEST_TIMEOUT):
     request = urllib.request.Request(
         url,
         data=json.dumps(body).encode("utf-8"),
-        headers=dict({"Content-Type": "application/json", "Accept": "application/json"}, **(headers or {})),
+        headers=dict(
+            {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": USER_AGENT},
+            **(headers or {}),
+        ),
         method="POST",
     )
     try:

@@ -186,6 +186,7 @@ class MainTest(HookTestCase):
         self.assertEqual(len(server.requests), 1)
         self.assertEqual(server.requests[0]["path"], "/v1/logs")
         self.assertEqual(server.requests[0]["headers"]["Authorization"], "Bearer vntg_ti_test")
+        self.assertEqual(server.requests[0]["headers"]["User-Agent"], hook.USER_AGENT)
 
     def test_skips_cloud_agents(self):
         with FakeServer() as server:

@@ -34,6 +34,8 @@ except ImportError:
 
 SCHEMA_VERSION = "1"
 PLUGIN_VERSION = "1.1.0"
+# Cloudflare rejects urllib's default User-Agent with error 1010.
+USER_AGENT = "vantage-cursor-plugin/%s" % PLUGIN_VERSION
 EVENT_NAME = "cursor.agent.turn"
 DEFAULT_ENDPOINT = "https://ingest.vantage.sh"
 TOKEN_FIELDS = (
@@ -213,11 +215,7 @@ def state_dir(env):
 
 
 def update_state(env, filename, update):
-    """Apply update(dict) to a JSON state file under an exclusive lock.
-
-    The lock and format match core's project hook, so the two never report the
-    same generation twice when both are installed.
-    """
+    """Apply update(dict) to a JSON state file under an exclusive lock."""
     try:
         directory = state_dir(env)
         os.makedirs(directory, mode=0o700, exist_ok=True)
@@ -520,7 +518,11 @@ def deliver(body, token, endpoint):
     request = urllib.request.Request(
         logs_url(endpoint),
         data=json.dumps(body).encode("utf-8"),
-        headers={"Authorization": "Bearer %s" % token, "Content-Type": "application/json"},
+        headers={
+            "Authorization": "Bearer %s" % token,
+            "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
+        },
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=OPEN_TIMEOUT) as response:
