@@ -21,7 +21,7 @@ import urllib.request
 import webbrowser
 
 DEFAULT_AUTHORIZATION_ENDPOINT = "https://console.vantage.sh/cursor/telemetry/authorize"
-DEFAULT_CLAIM_ENDPOINT = "https://api.vantage.sh/internal/cursor_telemetry_setup/claim"
+DEFAULT_CLAIM_ENDPOINT = "https://api.vantage.sh/plugins/cursor_telemetry_setup/claim"
 DEFAULT_INGEST_ENDPOINT = "https://ingest.vantage.sh"
 LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
 SIGN_IN_TIMEOUT = 600

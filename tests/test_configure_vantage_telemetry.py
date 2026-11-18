@@ -30,7 +30,7 @@ class SetupTest(ConfigureTestCase):
             env = dict(
                 self.env,
                 VANTAGE_CURSOR_AUTHORIZATION_ENDPOINT=server.url + "/cursor/telemetry/authorize",
-                VANTAGE_CURSOR_CLAIM_ENDPOINT=server.url + "/internal/cursor_telemetry_setup/claim",
+                VANTAGE_CURSOR_CLAIM_ENDPOINT=server.url + "/plugins/cursor_telemetry_setup/claim",
                 VANTAGE_CURSOR_INGEST_ENDPOINT=server.url,
             )
             out = io.StringIO()
