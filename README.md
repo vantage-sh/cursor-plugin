@@ -14,52 +14,13 @@ This plugin gives your AI assistant direct access to your Vantage workspace thro
 4. Search for "Vantage".
 5. Click **Add to Cursor**.
 
-## AI Reports telemetry
+## Tokenomics
 
-The plugin can send Cursor agent usage to [Vantage AI Reports](https://docs.vantage.sh). After setup, each local agent reply sends one record with the model, token counts, repository, pull request, and ticket. It never sends prompt or response text. Cloud Agent replies are skipped.
-
-Telemetry is off until a Vantage telemetry token is configured. The Vantage MCP is separate: each developer signs in to it with their own Vantage account, whichever way telemetry is set up.
-
-### Cursor Teams and Enterprise
-
-1. In Vantage, go to **Settings > Integrations > Cursor Telemetry** and create a token. You need permission to manage integrations.
-2. In the Cursor Marketplace, choose **Add to Team** on the Vantage plugin and set it to **Required** so it installs for everyone.
-3. In the Cursor dashboard, open **Plugins**, choose **Configure** on the Vantage plugin, and paste the token as the **Vantage telemetry token**.
-
-Every developer with the plugin then sends usage under that token, and each record carries the developer's Cursor email. Developers can ask the agent to check Vantage telemetry; after their next agent reply it confirms whether Vantage accepted it. To rotate the token, create a new one, update the plugin configuration, then revoke the old one in Vantage.
-
-### Individual setup
-
-Without a team token, each developer asks the agent:
-
-```text
-Set up Vantage telemetry
-```
-
-The agent runs the `setup-vantage-telemetry` skill, which opens Vantage in the browser. After you approve, the token is saved to `~/.config/vantage/cursor-telemetry.json` (`%APPDATA%\vantage\cursor-telemetry.json` on Windows), readable only by you. Ask the agent to check Vantage telemetry to confirm it works, or to remove Vantage telemetry to stop sending. You need permission to manage integrations in Vantage.
-
-### Device management
-
-You can also create a token on the Cursor Telemetry page and set these environment variables through your device management tool:
-
-```sh
-VANTAGE_CURSOR_INGEST_TOKEN=<token>
-VANTAGE_CURSOR_INGEST_ENDPOINT=https://ingest.vantage.sh
-```
-
-When more than one is set, the hook uses the team plugin token first, then these environment variables, then a token saved by the setup skill.
-
-### Requirements and options
-
-- The hook and setup skill need Python 3. Without it, the hook does nothing.
-- If the GitHub CLI (`gh`) is installed and signed in, the hook adds the open pull request for the current branch and the ticket in its title.
-- Tickets are matched as `ABC-123`. To match only certain prefixes, set `VANTAGE_TICKET_PREFIXES=ENG,OPS` or add `"ticket_prefixes": ["ENG", "OPS"]` to the saved file.
+The plugin can send Cursor agent usage to [Vantage Tokenomics](https://docs.vantage.sh/vantage_tokenomics), which attributes token spend to the person, the purpose, and the work that shipped. Telemetry stays off until a Vantage telemetry token is configured. A configured token sends one record per local agent reply, with the model, token counts, repository, pull request, and ticket. It does not send prompt or response text. The Vantage MCP is separate and still uses each developer's own Vantage sign-in.
 
 ## Development
 
 Run the tests with `bin/test`.
-
-To try the plugin in Cursor, copy this folder (without `.git`) to `~/.cursor/plugins/local/vantage` and run **Developer: Reload Window**. Uninstall the marketplace copy first, because it takes precedence. To see what the hook sends without a Vantage account, run `bin/fake-ingest` and start Cursor with `VANTAGE_CURSOR_INGEST_ENDPOINT=http://127.0.0.1:4318`.
 
 ## Support
 

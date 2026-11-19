@@ -290,7 +290,7 @@ def setup(env=os.environ, out=sys.stdout, force=False, open_browser=webbrowser.o
     path = write_config({"token": token, "endpoint": urls["ingest"]}, env)
     out.write("%s Saved it to %s (readable only by you).\n" % (message, path))
     out.write("Cursor now sends each local agent reply's model, token counts, repository, pull request, and ticket ")
-    out.write("to Vantage AI Reports. No prompt or response text is sent.\n")
+    out.write("to Vantage Tokenomics. No prompt or response text is sent.\n")
     return 0
 
 
