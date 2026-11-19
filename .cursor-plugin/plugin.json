@@ -1,13 +1,13 @@
 {
   "name": "vantage",
   "version": "1.1.0",
-  "description": "Query cloud costs, manage cost reports, budgets, alerts, and recommendations across your Vantage workspace",
+  "description": "Query cloud costs, manage cost reports, budgets, alerts, and recommendations across your Vantage workspace, and send Cursor agent usage to Vantage Tokenomics",
   "author": {
     "name": "Vantage",
     "email": "support@vantage.sh",
     "url": "https://vantage.sh"
   },
-  "keywords": ["vantage", "mcp", "cloud costs", "finops", "cost management", "cost visibility", "cost optimization", "cost recommendations"],
+  "keywords": ["vantage", "mcp", "cloud costs", "finops", "cost management", "cost visibility", "cost optimization", "cost recommendations", "tokenomics", "telemetry"],
   "logo": "logo.svg",
   "primaryColor": "#6742D6",
   "variables": {
@@ -16,7 +16,7 @@
       "VANTAGE_TELEMETRY_TOKEN": {
         "type": "string",
         "title": "Vantage telemetry token",
-        "description": "Optional. When set, developers with the plugin send agent usage to Vantage. The Vantage MCP still uses each developer's own Vantage sign-in."
+        "description": "Optional. When set, developers with the plugin send agent usage to Vantage Tokenomics. The Vantage MCP still uses each developer's own Vantage sign-in."
       }
     }
   }

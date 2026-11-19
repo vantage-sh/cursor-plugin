@@ -1,11 +1,11 @@
 ---
 name: setup-vantage-telemetry
-description: Connect this computer's Cursor agent usage to Vantage AI Reports, check that the connection works, or remove it. Use when the user asks to set up, check, verify, or remove Vantage telemetry.
+description: Connect this computer's Cursor agent usage to Vantage Tokenomics, check that the connection works, or remove it. Use when the user asks to set up, check, verify, or remove Vantage telemetry.
 ---
 
 # Set up Vantage telemetry
 
-The Vantage plugin includes a hook that sends one record per local agent reply to Vantage AI Reports: the model, token counts, repository, pull request, and ticket. It never sends prompt or response text. The hook stays idle until it has a Vantage telemetry token. On Cursor Teams and Enterprise, an admin usually sets one for everyone in the plugin's configuration, and no sign-in is needed. The Vantage MCP is separate: it always uses the developer's own Vantage sign-in.
+The Vantage plugin includes a hook that sends one record per local agent reply to Vantage Tokenomics: the model, token counts, repository, pull request, and ticket. It never sends prompt or response text. The hook stays idle until it has a Vantage telemetry token. On Cursor Teams and Enterprise, an admin usually sets one for everyone in the plugin's configuration, and no sign-in is needed. The Vantage MCP is separate: it always uses the developer's own Vantage sign-in.
 
 All commands below run `scripts/configure_vantage_telemetry.sh`, in this skill's directory.
 
@@ -31,7 +31,7 @@ When the user asks whether telemetry works, run:
 sh scripts/configure_vantage_telemetry.sh --status
 ```
 
-It reports where the token comes from and whether Vantage accepts it. A team admin's token is only visible after the hook has run, so if the result says it is not set up, ask the user to send one agent message and check again. Records appear in AI Reports after the next local agent reply. If the Vantage MCP server is connected, the user can also look for Cursor in their AI Reports there.
+It reports where the token comes from and whether Vantage accepts it. A team admin's token is only visible after the hook has run, so if the result says it is not set up, ask the user to send one agent message and check again. Records appear in Vantage Tokenomics after the next local agent reply. If the Vantage MCP server is connected, the user can also look for Cursor in Vantage Tokenomics there.
 
 ## Remove
 
