@@ -1,6 +1,12 @@
 {
   "version": 1,
   "hooks": {
+    "sessionStart": [
+      {
+        "command": "sh ./hooks/run_vantage_usage.sh \"${VANTAGE_TELEMETRY_TOKEN}\"",
+        "timeout": 10
+      }
+    ],
     "afterAgentResponse": [
       {
         "command": "sh ./hooks/run_vantage_usage.sh \"${VANTAGE_TELEMETRY_TOKEN}\"",

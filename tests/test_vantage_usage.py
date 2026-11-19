@@ -4,6 +4,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 from tests.helpers import ROOT, FakeServer, load
 
@@ -134,6 +135,51 @@ class BuildRequestTest(HookTestCase):
         self.assertEqual(pattern.search("OPS-9 change").group(1), "OPS-9")
         self.assertEqual(hook.ticket_pattern({}, {}).search("ENG-1 change").group(1), "ENG-1")
 
+    def test_adds_values_selected_from_the_account_classifier(self):
+        self.assertEqual(
+            hook.tag(
+                [
+                    "--session",
+                    "conv-1",
+                    "--tag",
+                    "work_type=customer_defined_purpose",
+                    "--tag",
+                    "project=Customer project",
+                    "--tag",
+                    "classifier_version=v2",
+                    "--tag",
+                    "department=engineering",
+                ],
+                env=self.env,
+                stdout=io.StringIO(),
+                stderr=io.StringIO(),
+            ),
+            0,
+        )
+
+        body = hook.build_request(payload(), env=self.env)
+        record = body["resourceLogs"][0]["scopeLogs"][0]["logRecords"][0]
+        tagged = attributes(record["attributes"])
+
+        self.assertEqual(
+            tagged["vantage.classification.work_type"],
+            "customer_defined_purpose",
+        )
+        self.assertEqual(tagged["vantage.classification.project"], "Customer project")
+        self.assertEqual(tagged["vantage.classification.department"], "engineering")
+        self.assertEqual(tagged["vantage.classification.classifier_version"], "v2")
+
+    def test_rejects_invalid_custom_tags(self):
+        for value in ("missing-equals", "Department=engineering", "department=line\nbreak"):
+            status = hook.tag(
+                ["--session", "conv-1", "--tag", value],
+                env=self.env,
+                stdout=io.StringIO(),
+                stderr=io.StringIO(),
+            )
+
+            self.assertEqual(status, 1)
+
 
 class CredentialsTest(HookTestCase):
     def test_team_plugin_token_wins_over_environment_and_file(self):
@@ -216,6 +262,47 @@ class MainTest(HookTestCase):
 
         self.assertEqual(hook.main(stdin=io.StringIO("not json"), stdout=stdout, stderr=io.StringIO(), env=self.env), 0)
         self.assertEqual(stdout.getvalue(), "{}\n")
+
+    def test_session_start_refreshes_and_injects_the_account_classifier(self):
+        self.write_config({"classifier_token": "vntg_cr_customer"})
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = json.dumps(
+            {"classifier_markdown": "# Customer classifier\n"}
+        ).encode("utf-8")
+        response.headers = {"ETag": '"current"'}
+        opener = mock.Mock()
+        opener.open.return_value = response
+        stdout = io.StringIO()
+
+        with mock.patch.object(hook.urllib.request, "build_opener", return_value=opener):
+            code = hook.main(
+                stdin=io.StringIO(
+                    json.dumps(
+                        {"hook_event_name": "sessionStart", "session_id": "session-1"}
+                    )
+                ),
+                stdout=stdout,
+                stderr=io.StringIO(),
+                env=self.env,
+            )
+
+        self.assertEqual(code, 0)
+        context = json.loads(stdout.getvalue())["additional_context"]
+        self.assertIn("classifier.md", context)
+        self.assertIn("tag --session session-1", context)
+        with open(hook.classifier_markdown_path(self.env), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "# Customer classifier\n")
+        request = opener.open.call_args.args[0]
+        self.assertEqual(
+            opener.open.call_args.kwargs["timeout"],
+            hook.CLASSIFIER_TIMEOUT,
+        )
+        self.assertEqual(request.get_header("Authorization"), "Bearer vntg_cr_customer")
+        self.assertEqual(
+            os.stat(hook.classifier_markdown_path(self.env)).st_mode & 0o777,
+            0o600,
+        )
 
     def test_records_source_and_result_without_the_token(self):
         with FakeServer(default=(401, {})) as server:

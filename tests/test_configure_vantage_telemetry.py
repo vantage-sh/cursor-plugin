@@ -25,11 +25,27 @@ class ConfigureTestCase(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def setup_payload(self, ingest_token="vntg_ti_new"):
+        return {
+            "plaintext_token": ingest_token,
+            "classifier_read_token": "vntg_cr_classifier",
+            "classifier_markdown": "# Customer classifier\n",
+        }
+
+    def setup_credentials(self, ingest_token="vntg_ti_new"):
+        return {
+            "ingest_token": ingest_token,
+            "classifier": {
+                "token": "vntg_cr_classifier",
+                "markdown": b"# Customer classifier\n",
+            },
+        }
+
 
 class SetupTest(ConfigureTestCase):
     def test_signs_in_verifies_and_saves_token_for_the_hook(self):
         opened = []
-        with FakeServer(responses=[(202, {}), (201, {"plaintext_token": "vntg_ti_new"}), (200, {})]) as server:
+        with FakeServer(responses=[(202, {}), (201, self.setup_payload()), (200, {})]) as server:
             env = dict(
                 self.env,
                 VANTAGE_CURSOR_AUTHORIZATION_ENDPOINT=server.url + "/cursor/telemetry/authorize",
@@ -37,7 +53,7 @@ class SetupTest(ConfigureTestCase):
                 VANTAGE_CURSOR_INGEST_ENDPOINT=server.url,
             )
             out = io.StringIO()
-            wait = lambda url, verifier: configure.wait_for_ingest_token(url, verifier, sleep=lambda _s: None)
+            wait = lambda url, verifier: configure.wait_for_setup_credentials(url, verifier, sleep=lambda _s: None)
 
             code = configure.setup(env, out, open_browser=opened.append, wait=wait)
 
@@ -55,11 +71,30 @@ class SetupTest(ConfigureTestCase):
         path = self.env["VANTAGE_CURSOR_TELEMETRY_CONFIG"]
         self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
         self.assertEqual(hook.credentials(self.env)[:2], ("vntg_ti_new", server.url))
+        saved = configure.read_config(self.env)
+        self.assertEqual(saved["classifier_token"], "vntg_cr_classifier")
+        with open(configure.classifier_markdown_path(self.env), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "# Customer classifier\n")
+        self.assertEqual(
+            stat.S_IMODE(os.stat(configure.classifier_markdown_path(self.env)).st_mode),
+            0o600,
+        )
         self.assertNotIn("vntg_ti_new", out.getvalue())
 
     def test_existing_token_is_checked_instead_of_signing_in_again(self):
         with FakeServer() as server:
-            configure.write_config({"token": "vntg_ti_saved", "endpoint": server.url}, self.env)
+            configure.write_config(
+                {
+                    "token": "vntg_ti_saved",
+                    "endpoint": server.url,
+                    "classifier_token": "vntg_cr_saved",
+                },
+                self.env,
+            )
+            configure.write_private_file(
+                configure.classifier_markdown_path(self.env),
+                b"# Saved classifier\n",
+            )
             out = io.StringIO()
 
             code = configure.setup(self.env, out, open_browser=self.fail)
@@ -78,10 +113,14 @@ class SetupTest(ConfigureTestCase):
 class WaitForTokenTest(ConfigureTestCase):
     def wait(self, responses):
         with FakeServer(responses=responses) as server:
-            return configure.wait_for_ingest_token(server.url, "verifier", sleep=lambda _s: None)
+            return configure.wait_for_setup_credentials(server.url, "verifier", sleep=lambda _s: None)
 
     def test_retries_while_pending_or_throttled(self):
-        self.assertEqual(self.wait([(202, {}), (429, {}), (201, {"plaintext_token": "tok"})]), "tok")
+        credentials = self.wait(
+            [(202, {}), (429, {}), (503, {}), (201, self.setup_payload("tok"))]
+        )
+        self.assertEqual(credentials["ingest_token"], "tok")
+        self.assertEqual(credentials["classifier"]["token"], "vntg_cr_classifier")
 
     def test_denied_and_invalid_codes_stop(self):
         with self.assertRaisesRegex(configure.SetupError, "denied"):
@@ -93,7 +132,7 @@ class WaitForTokenTest(ConfigureTestCase):
         times = iter([0, 0, 700])
         with FakeServer(default=(202, {})) as server:
             with self.assertRaisesRegex(configure.SetupError, "Timed out"):
-                configure.wait_for_ingest_token(server.url, "v", sleep=lambda _s: None, clock=lambda: next(times))
+                configure.wait_for_setup_credentials(server.url, "v", sleep=lambda _s: None, clock=lambda: next(times))
 
 
 class TeamTokenTest(ConfigureTestCase):
@@ -133,7 +172,7 @@ class TeamTokenTest(ConfigureTestCase):
                 dict(self.env, VANTAGE_CURSOR_INGEST_ENDPOINT="http://127.0.0.1:9"),
                 io.StringIO(),
                 open_browser=opened.append,
-                wait=lambda _url, _verifier: "vntg_ti_new",
+                wait=lambda _url, _verifier: self.setup_credentials(),
             )
 
         self.assertEqual(len(opened), 1)
@@ -159,11 +198,16 @@ class StatusAndRemoveTest(ConfigureTestCase):
 
     def test_remove_deletes_saved_token_and_flags_managed_environment(self):
         configure.write_config({"token": "vntg_ti_saved"}, self.env)
+        configure.write_private_file(
+            configure.classifier_markdown_path(self.env),
+            b"# Classifier\n",
+        )
         out = io.StringIO()
 
         configure.remove(dict(self.env, VANTAGE_CURSOR_INGEST_TOKEN="managed"), out)
 
         self.assertFalse(os.path.exists(self.env["VANTAGE_CURSOR_TELEMETRY_CONFIG"]))
+        self.assertFalse(os.path.exists(configure.classifier_markdown_path(self.env)))
         self.assertIn("still set in the environment", out.getvalue())
 
     def test_hook_and_setup_agree_on_config_location(self):

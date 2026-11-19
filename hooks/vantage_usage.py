@@ -13,9 +13,11 @@ its credential source and result, never the token, so the setup skill can
 report whether telemetry works.
 """
 
+import argparse
 import json
 import os
 import re
+import shlex
 import sqlite3
 import subprocess
 import sys
@@ -33,11 +35,18 @@ except ImportError:
 
 
 SCHEMA_VERSION = "1"
-PLUGIN_VERSION = "1.1.0"
+PLUGIN_VERSION = "1.2.0"
 # The ingest endpoint rejects urllib's default User-Agent.
 USER_AGENT = "vantage-cursor-plugin/%s" % PLUGIN_VERSION
 EVENT_NAME = "cursor.agent.turn"
 DEFAULT_ENDPOINT = "https://ingest.vantage.sh"
+DEFAULT_CLASSIFIER_ENDPOINT = "https://api.vantage.sh/plugins/realtime_ai_classifier"
+MAX_CLASSIFIER_BYTES = 64 * 1024
+CLASSIFIER_TIMEOUT = 2
+TAG_SECONDS = 604_800
+MAX_CLASSIFICATION_TAGS = 32
+MAX_CLASSIFICATION_VALUE_LENGTH = 512
+CLASSIFICATION_TAG_KEY = re.compile(r"\A[a-z][a-z0-9_.-]{0,63}\Z")
 TOKEN_FIELDS = (
     ("input_tokens", "cursor.agent.input_tokens"),
     ("output_tokens", "cursor.agent.output_tokens"),
@@ -73,6 +82,19 @@ def read_config(env=os.environ):
     except (OSError, ValueError):
         return {}
     return config if isinstance(config, dict) else {}
+
+
+def classifier_markdown_path(env=os.environ):
+    configured = env.get("VANTAGE_CURSOR_CLASSIFIER_PATH", "")
+    return configured or os.path.join(os.path.dirname(config_path(env)), "classifier.md")
+
+
+def classifier_etag_path(env=os.environ):
+    return classifier_markdown_path(env) + ".etag"
+
+
+def classifier_endpoint(env=os.environ):
+    return env.get("VANTAGE_CLASSIFIER_ENDPOINT", "").strip() or DEFAULT_CLASSIFIER_ENDPOINT
 
 
 def team_token(env=os.environ):
@@ -238,6 +260,93 @@ def update_state(env, filename, update):
             return result
     except OSError:
         return None
+
+
+def update_tags(env, session_id, options):
+    def update(current):
+        now = int(time.time())
+        for key in list(current):
+            value = current[key]
+            if not isinstance(value, dict) or now - value.get("at", 0) > TAG_SECONDS:
+                del current[key]
+        current[session_id] = dict(options, at=now)
+        return True
+
+    return update_state(env, "tags.json", update) is True
+
+
+def valid_classification_tag(key, value):
+    return (
+        isinstance(key, str)
+        and CLASSIFICATION_TAG_KEY.fullmatch(key) is not None
+        and isinstance(value, str)
+        and bool(value)
+        and len(value) <= MAX_CLASSIFICATION_VALUE_LENGTH
+        and not any(ord(character) < 32 or ord(character) == 127 for character in value)
+    )
+
+
+def add_classification_tag(tags, key, value):
+    key = key.strip()
+    value = value.strip()
+    if not valid_classification_tag(key, value):
+        raise ValueError("classification tags require a lowercase key and a non-empty value")
+    if key not in tags and len(tags) >= MAX_CLASSIFICATION_TAGS:
+        raise ValueError("at most %d classification tags are allowed" % MAX_CLASSIFICATION_TAGS)
+    tags[key] = value
+
+
+def classification_attributes(tags):
+    return [
+        string_attribute("vantage.classification.%s" % key, value)
+        for key, value in sorted(tags.items())
+        if valid_classification_tag(key, value)
+    ]
+
+
+def skill_tags(env, session_id):
+    try:
+        with open(os.path.join(state_dir(env), "tags.json"), encoding="utf-8") as handle:
+            current = json.load(handle)
+        value = current.get(session_id, {}) if isinstance(current, dict) else {}
+        if not isinstance(value, dict) or int(time.time()) - value.get("at", 0) > TAG_SECONDS:
+            return {}
+        return {
+            key: tag_value
+            for key, tag_value in value.items()
+            if key != "at" and valid_classification_tag(key, tag_value)
+        }
+    except (OSError, TypeError, ValueError):
+        return {}
+
+
+def tag(argv, env=os.environ, stdout=sys.stdout, stderr=sys.stderr):
+    try:
+        parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+        parser.add_argument("--session")
+        parser.add_argument("--tag", action="append", default=[])
+        parsed = vars(parser.parse_args(argv))
+        session_id = (parsed.pop("session") or "").strip()
+        if not session_id:
+            raise ValueError("--session is required")
+
+        raw_tags = parsed.pop("tag")
+        options = {}
+        for raw_tag in raw_tags:
+            key, separator, value = raw_tag.partition("=")
+            if not separator:
+                raise ValueError("--tag must use key=value")
+            add_classification_tag(options, key, value)
+        if not options:
+            raise ValueError("give at least one tag")
+        if not update_tags(env, session_id, options):
+            raise ValueError("could not save tags")
+        stdout.write("Saved Vantage tags for this Cursor session.\n")
+        return 0
+    except (Exception, SystemExit) as error:
+        message = "invalid tag arguments" if isinstance(error, SystemExit) else str(error)
+        stderr.write("[vantage_usage] %s\n" % message)
+        return 1
 
 
 def request_key(payload):
@@ -444,6 +553,7 @@ def build_request(payload, env=os.environ, config=None, now=None):
 
     config = config or {}
     conversation_id = str(payload.get("conversation_id") or "")
+    classified = skill_tags(env, conversation_id)
     deadline = time.monotonic() + LOOKUP_BUDGET
     repository, pull = workspace_context(workspace_root(payload, env), deadline, ticket_pattern(env, config), env)
     local = local_model_context(conversation_id, env)
@@ -496,7 +606,9 @@ def build_request(payload, env=os.environ, config=None, now=None):
                                 "severityText": "INFO",
                                 "eventName": EVENT_NAME,
                                 "body": {"stringValue": EVENT_NAME},
-                                "attributes": [item for item in attributes if item] + tokens,
+                                "attributes": [item for item in attributes if item]
+                                + classification_attributes(classified)
+                                + tokens,
                             }
                         ],
                     }
@@ -512,6 +624,106 @@ def logs_url(endpoint):
     if parsed.scheme == "https" or (parsed.scheme == "http" and parsed.hostname in LOOPBACK_HOSTS):
         return url
     raise ValueError("refusing to send the ingest token over %s" % (parsed.scheme or "an unknown scheme"))
+
+
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+        return None
+
+
+def write_private_file(path, content):
+    directory = os.path.dirname(path)
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(dir=directory, prefix=".%s." % os.path.basename(path))
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(content)
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def refresh_classifier(env=os.environ, stderr=sys.stderr):
+    markdown_path = classifier_markdown_path(env)
+    cached = os.path.isfile(markdown_path)
+    try:
+        config = read_config(env)
+        token = config.get("classifier_token")
+        if not isinstance(token, str) or not token.strip():
+            return cached
+
+        endpoint = classifier_endpoint(env)
+        parsed = urllib.parse.urlparse(endpoint)
+        if not (
+            parsed.scheme == "https"
+            or (parsed.scheme == "http" and parsed.hostname in LOOPBACK_HOSTS)
+        ):
+            raise ValueError("refusing to send the classifier credential over %s" % parsed.scheme)
+
+        headers = {
+            "Accept": "application/json",
+            "Authorization": "Bearer %s" % token.strip(),
+            "User-Agent": USER_AGENT,
+        }
+        try:
+            with open(classifier_etag_path(env), encoding="utf-8") as handle:
+                etag = handle.read().strip()
+            if etag:
+                headers["If-None-Match"] = etag
+        except (OSError, UnicodeError):
+            pass
+
+        request = urllib.request.Request(endpoint, headers=headers, method="GET")
+        opener = urllib.request.build_opener(NoRedirectHandler)
+        try:
+            response = opener.open(request, timeout=CLASSIFIER_TIMEOUT)
+        except urllib.error.HTTPError as error:
+            if error.code == 304:
+                return cached
+            raise
+        with response:
+            raw = response.read(MAX_CLASSIFIER_BYTES + 1)
+            if len(raw) > MAX_CLASSIFIER_BYTES:
+                raise ValueError("classifier response is too large")
+            payload = json.loads(raw.decode("utf-8"))
+            markdown = payload.get("classifier_markdown") if isinstance(payload, dict) else None
+            if not isinstance(markdown, str) or not markdown.strip():
+                raise ValueError("classifier response is empty")
+            write_private_file(markdown_path, markdown.encode("utf-8"))
+            new_etag = response.headers.get("ETag", "").strip()
+            if new_etag:
+                write_private_file(classifier_etag_path(env), new_etag.encode("utf-8"))
+        return True
+    except (OSError, UnicodeError, ValueError, urllib.error.URLError) as error:
+        stderr.write("[vantage_usage] classifier refresh failed: %s\n" % type(error).__name__)
+        return cached
+
+
+def attribution_context(session_id, env=os.environ):
+    script = os.path.abspath(__file__)
+    arguments = [sys.executable, script, "tag", "--session", session_id]
+    if os.name == "nt":
+        command = subprocess.list2cmdline(arguments)
+    else:
+        command = " ".join(shlex.quote(argument) for argument in arguments)
+    return (
+        "Vantage classifier file for this Cursor session: %s\n"
+        "Vantage session attribution command: %s\n"
+        "Use the vantage-session-attribution skill to read the classifier and append only the flags it directs."
+        % (classifier_markdown_path(env), command)
+    )
+
+
+def session_start(payload, env=os.environ, stderr=sys.stderr):
+    session_id = str(payload.get("session_id") or payload.get("conversation_id") or "").strip()
+    if not session_id or not refresh_classifier(env, stderr=stderr):
+        return None
+    return attribution_context(session_id, env)
 
 
 def deliver(body, token, endpoint):
@@ -551,18 +763,26 @@ def handle(payload, env=os.environ, stderr=sys.stderr):
     return None
 
 
-def main(stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr, env=os.environ):
+def main(argv=(), stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr, env=os.environ):
+    if argv and argv[0] == "tag":
+        return tag(argv[1:], env=env, stdout=stdout, stderr=stderr)
+    response = {}
     try:
         payload = json.loads(stdin.read() or "null")
-        handle(payload, env=env, stderr=stderr)
+        if isinstance(payload, dict) and payload.get("hook_event_name") == "sessionStart":
+            context = session_start(payload, env=env, stderr=stderr)
+            if context:
+                response["additional_context"] = context
+        else:
+            handle(payload, env=env, stderr=stderr)
     except ValueError:
         pass
     except Exception as error:  # noqa: BLE001 - a hook must never fail the agent turn
         stderr.write("[vantage_usage] %s: %s\n" % (type(error).__name__, error))
     finally:
-        stdout.write("{}\n")
+        stdout.write(json.dumps(response) + "\n")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))
