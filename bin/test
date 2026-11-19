@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+
+cd "$(dirname "$0")/.."
+python3 -m json.tool .cursor-plugin/plugin.json >/dev/null
+python3 -m json.tool hooks/hooks.json >/dev/null
+python3 -m json.tool mcp.json >/dev/null
+exec python3 -m unittest discover -s tests -t . -p 'test_*.py' "$@"

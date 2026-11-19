@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""Local stand-in for Vantage's telemetry endpoint, for trying the plugin.
+
+Accepts any bearer token on POST /v1/logs and prints each record's attributes.
+Point the plugin at it with VANTAGE_CURSOR_INGEST_ENDPOINT=http://127.0.0.1:<port>.
+"""
+
+import json
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+
+def attributes(items):
+    return {item["key"]: next(iter(item["value"].values())) for item in items or []}
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        body = json.loads(self.rfile.read(length) or b"{}")
+        authorization = self.headers.get("Authorization", "")
+        token = authorization.removeprefix("Bearer ")
+        shown = "%s...%s" % (token[:8], token[-4:]) if len(token) > 12 else "(missing)"
+        records = 0
+        for resource_log in body.get("resourceLogs", []):
+            resource = attributes(resource_log.get("resource", {}).get("attributes"))
+            for scope_log in resource_log.get("scopeLogs", []):
+                for record in scope_log.get("logRecords", []):
+                    records += 1
+                    print(json.dumps({"token": shown, "resource": resource, "attributes": attributes(record.get("attributes"))}, indent=2), flush=True)
+        if not records:
+            print("check request (no records), token %s" % shown, flush=True)
+        self.send_response(200 if self.path == "/v1/logs" and token else 401)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b"{}")
+
+    def log_message(self, *_args):
+        pass
+
+
+def main():
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 4318
+    print("Listening on http://127.0.0.1:%d/v1/logs" % port, flush=True)
+    HTTPServer(("127.0.0.1", port), Handler).serve_forever()
+
+
+if __name__ == "__main__":
+    main()
