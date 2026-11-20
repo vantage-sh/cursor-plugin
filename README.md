@@ -26,6 +26,13 @@ classifier is used by Vantage's Codex and Cursor integrations. Classifiers may
 define custom tag dimensions, which are sent under the protected
 `vantage.classification.*` namespace.
 
+On a Cursor team marketplace, an admin can create a standalone classifier token
+under **Tokenomics → Classifier → Manage Classifier Tokens** in Vantage. In the
+Cursor dashboard, open **Plugins → Configure** on the Vantage plugin and set
+**Vantage classifier token**. The team token takes precedence over a developer’s
+locally saved classifier token. Keep the separate **Vantage telemetry token**
+configured for usage reporting. Start a new Cursor session to load the strategy.
+
 ## Development
 
 Run the tests with `bin/test`.

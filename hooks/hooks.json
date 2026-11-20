@@ -3,7 +3,7 @@
   "hooks": {
     "sessionStart": [
       {
-        "command": "sh ./hooks/run_vantage_usage.sh \"${VANTAGE_TELEMETRY_TOKEN}\"",
+        "command": "sh ./hooks/run_vantage_usage.sh \"${VANTAGE_TELEMETRY_TOKEN}\" \"${VANTAGE_CLASSIFIER_TOKEN}\"",
         "timeout": 10
       }
     ],

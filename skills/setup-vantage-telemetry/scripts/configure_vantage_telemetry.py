@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import secrets
+import shutil
 import sys
 import tempfile
 import time
@@ -300,6 +301,11 @@ def remove(env=os.environ, out=sys.stdout):
             removed_classifier = True
         except FileNotFoundError:
             pass
+    try:
+        shutil.rmtree(os.path.join(os.path.dirname(path), "team-classifier-cache"))
+        removed_classifier = True
+    except FileNotFoundError:
+        pass
     if removed_classifier:
         out.write("Removed the cached Vantage classifier.\n")
     if team_configured(env):

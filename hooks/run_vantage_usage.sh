@@ -4,8 +4,10 @@
 #
 # $1 is the team's VANTAGE_TELEMETRY_TOKEN plugin variable. It is empty, or the
 # unexpanded placeholder, when no admin has set one; the hook ignores both.
+# $2 carries the independent classifier token on sessionStart.
 VANTAGE_CURSOR_TEAM_TOKEN="${1:-}"
-export VANTAGE_CURSOR_TEAM_TOKEN
+VANTAGE_CURSOR_TEAM_CLASSIFIER_TOKEN="${2:-}"
+export VANTAGE_CURSOR_TEAM_TOKEN VANTAGE_CURSOR_TEAM_CLASSIFIER_TOKEN
 
 python_path="${VANTAGE_CURSOR_PYTHON:-}"
 if [ -z "$python_path" ]; then

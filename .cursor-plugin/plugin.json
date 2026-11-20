@@ -17,6 +17,11 @@
         "type": "string",
         "title": "Vantage telemetry token",
         "description": "Optional. When set, developers with the plugin send agent usage to Vantage Tokenomics. The Vantage MCP still uses each developer's own Vantage sign-in."
+      },
+      "VANTAGE_CLASSIFIER_TOKEN": {
+        "type": "string",
+        "title": "Vantage classifier token",
+        "description": "Optional. A standalone, read-only token from Tokenomics → Classifier. Applies the account’s tagging strategy to the team."
       }
     }
   }

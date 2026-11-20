@@ -14,6 +14,7 @@ report whether telemetry works.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -89,16 +90,17 @@ def classifier_markdown_path(env=os.environ):
     return configured or os.path.join(os.path.dirname(config_path(env)), "classifier.md")
 
 
-def classifier_etag_path(env=os.environ):
-    return classifier_markdown_path(env) + ".etag"
+def team_classifier_markdown_path(env, token, endpoint):
+    key = hashlib.sha256(f"{endpoint}\n{token}".encode("utf-8")).hexdigest()
+    return os.path.join(os.path.dirname(config_path(env)), "team-classifier-cache", key, "classifier.md")
 
 
 def classifier_endpoint(env=os.environ):
     return env.get("VANTAGE_CLASSIFIER_ENDPOINT", "").strip() or DEFAULT_CLASSIFIER_ENDPOINT
 
 
-def team_token(env=os.environ):
-    token = env.get("VANTAGE_CURSOR_TEAM_TOKEN", "").strip()
+def team_token(env=os.environ, variable="VANTAGE_CURSOR_TEAM_TOKEN"):
+    token = env.get(variable, "").strip()
     if not token or "${" in token or any(character.isspace() for character in token):
         return None
     return token
@@ -649,15 +651,18 @@ def write_private_file(path, content):
 
 
 def refresh_classifier(env=os.environ, stderr=sys.stderr):
-    markdown_path = classifier_markdown_path(env)
-    cached = os.path.isfile(markdown_path)
+    endpoint = classifier_endpoint(env)
+    token = team_token(env, "VANTAGE_CURSOR_TEAM_CLASSIFIER_TOKEN")
+    if token:
+        markdown_path = team_classifier_markdown_path(env, token, endpoint)
+    else:
+        markdown_path = classifier_markdown_path(env)
+        token = read_config(env).get("classifier_token")
+    etag_path = markdown_path + ".etag"
+    cached_path = markdown_path if os.path.isfile(markdown_path) else None
     try:
-        config = read_config(env)
-        token = config.get("classifier_token")
         if not isinstance(token, str) or not token.strip():
-            return cached
-
-        endpoint = classifier_endpoint(env)
+            return cached_path
         parsed = urllib.parse.urlparse(endpoint)
         if not (
             parsed.scheme == "https"
@@ -671,9 +676,9 @@ def refresh_classifier(env=os.environ, stderr=sys.stderr):
             "User-Agent": USER_AGENT,
         }
         try:
-            with open(classifier_etag_path(env), encoding="utf-8") as handle:
+            with open(etag_path, encoding="utf-8") as handle:
                 etag = handle.read().strip()
-            if etag:
+            if etag and cached_path:
                 headers["If-None-Match"] = etag
         except (OSError, UnicodeError):
             pass
@@ -683,8 +688,11 @@ def refresh_classifier(env=os.environ, stderr=sys.stderr):
         try:
             response = opener.open(request, timeout=CLASSIFIER_TIMEOUT)
         except urllib.error.HTTPError as error:
+            error.close()
             if error.code == 304:
-                return cached
+                return cached_path
+            if error.code in (401, 403):
+                return None
             raise
         with response:
             raw = response.read(MAX_CLASSIFIER_BYTES + 1)
@@ -697,14 +705,14 @@ def refresh_classifier(env=os.environ, stderr=sys.stderr):
             write_private_file(markdown_path, markdown.encode("utf-8"))
             new_etag = response.headers.get("ETag", "").strip()
             if new_etag:
-                write_private_file(classifier_etag_path(env), new_etag.encode("utf-8"))
-        return True
+                write_private_file(etag_path, new_etag.encode("utf-8"))
+        return markdown_path
     except (OSError, UnicodeError, ValueError, urllib.error.URLError) as error:
         stderr.write("[vantage_usage] classifier refresh failed: %s\n" % type(error).__name__)
-        return cached
+        return cached_path
 
 
-def attribution_context(session_id, env=os.environ):
+def attribution_context(session_id, markdown_path):
     script = os.path.abspath(__file__)
     arguments = [sys.executable, script, "tag", "--session", session_id]
     if os.name == "nt":
@@ -715,15 +723,18 @@ def attribution_context(session_id, env=os.environ):
         "Vantage classifier file for this Cursor session: %s\n"
         "Vantage session attribution command: %s\n"
         "Use the vantage-session-attribution skill to read the classifier and append only the flags it directs."
-        % (classifier_markdown_path(env), command)
+        % (markdown_path, command)
     )
 
 
 def session_start(payload, env=os.environ, stderr=sys.stderr):
     session_id = str(payload.get("session_id") or payload.get("conversation_id") or "").strip()
-    if not session_id or not refresh_classifier(env, stderr=stderr):
+    if not session_id:
         return None
-    return attribution_context(session_id, env)
+    markdown_path = refresh_classifier(env, stderr=stderr)
+    if markdown_path:
+        return attribution_context(session_id, markdown_path)
+    return None
 
 
 def deliver(body, token, endpoint):

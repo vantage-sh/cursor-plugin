@@ -315,17 +315,43 @@ class MainTest(HookTestCase):
         self.assertEqual((recorded["source"], recorded["result"]), ("team", 401))
         self.assertNotIn("vntg_ti_team", json.dumps(recorded))
 
-    def run_hook_command(self, env):
+    def run_hook_command(self, env, reply=None):
+        reply = payload() if reply is None else reply
         with open(os.path.join(ROOT, "hooks", "hooks.json")) as handle:
-            command = json.load(handle)["hooks"]["afterAgentResponse"][0]["command"]
+            command = json.load(handle)["hooks"][reply["hook_event_name"]][0]["command"]
         return subprocess.run(
             ["sh", "-c", command],
             cwd=ROOT,
-            input=json.dumps(payload()).encode("utf-8"),
+            input=json.dumps(reply).encode("utf-8"),
             env=env,
             capture_output=True,
             check=True,
         )
+
+    def test_session_start_uses_the_team_token_and_isolates_its_cache(self):
+        self.write_config({"classifier_token": "vntg_cr_individual"})
+        reply = {"hook_event_name": "sessionStart", "session_id": "team-session"}
+        responses = [
+            (200, {"classifier_markdown": "# Team classifier\n"}),
+            (503, {}),
+            (401, {}),
+        ]
+        with FakeServer(responses=responses) as server:
+            env = dict(
+                self.env,
+                VANTAGE_CLASSIFIER_TOKEN="vntg_cr_team",
+                VANTAGE_CLASSIFIER_ENDPOINT=server.url + "/plugins/realtime_ai_classifier",
+            )
+            completed = self.run_hook_command(env, reply)
+            rotated = self.run_hook_command(dict(env, VANTAGE_CLASSIFIER_TOKEN="vntg_cr_replacement"), reply)
+            revoked = self.run_hook_command(env, reply)
+
+        self.assertEqual(server.requests[0]["headers"]["Authorization"], "Bearer vntg_cr_team")
+        self.assertEqual(server.requests[1]["headers"]["Authorization"], "Bearer vntg_cr_replacement")
+        self.assertIn("additional_context", json.loads(completed.stdout))
+        self.assertNotIn(b"vntg_cr_team", completed.stdout + completed.stderr)
+        self.assertEqual(json.loads(rotated.stdout), {})
+        self.assertEqual(json.loads(revoked.stdout), {})
 
     def test_hook_command_passes_the_team_variable_to_the_hook(self):
         with FakeServer() as server:
