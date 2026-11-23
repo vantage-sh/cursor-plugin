@@ -18,6 +18,18 @@ This plugin gives your AI assistant direct access to your Vantage workspace thro
 
 The plugin can send Cursor agent usage to [Vantage Tokenomics](https://docs.vantage.sh/vantage_tokenomics), which attributes token spend to the person, the purpose, and the work that shipped. Telemetry stays off until a Vantage telemetry token is configured. A configured token sends one record per local agent reply, with the model, token counts, repository, pull request, and ticket. It does not send prompt or response text. The Vantage MCP is separate and still uses each developer's own Vantage sign-in.
 
+When setup receives a classifier, it saves the read-only credential and Markdown
+with user-only permissions. If a cached classifier is available, the hook returns
+its path immediately and refreshes it in the background. The first session
+without a cache fetches the classifier directly. The same account-level
+classifier is used by Vantage's Codex and Cursor integrations. Classifiers may
+define custom tag dimensions, which are sent under the protected
+`vantage.classification.*` namespace.
+
+Cursor teams can use an optional, read-only classifier token to apply their
+Vantage account’s tagging strategy to team usage. Team usage still sends without
+custom tags when no classifier token is configured.
+
 ## Development
 
 Run the tests with `bin/test`.

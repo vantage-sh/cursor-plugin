@@ -4,6 +4,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 from tests.helpers import ROOT, FakeServer, load
 
@@ -134,6 +135,58 @@ class BuildRequestTest(HookTestCase):
         self.assertEqual(pattern.search("OPS-9 change").group(1), "OPS-9")
         self.assertEqual(hook.ticket_pattern({}, {}).search("ENG-1 change").group(1), "ENG-1")
 
+    def test_adds_values_selected_from_the_account_classifier(self):
+        self.assertEqual(
+            hook.tag(
+                [
+                    "--session",
+                    "conv-1",
+                    "--tag",
+                    "work_type=customer_defined_purpose",
+                    "--tag",
+                    "project=Customer project",
+                    "--tag",
+                    "classifier_version=v2",
+                    "--tag",
+                    "department=engineering",
+                ],
+                env=self.env,
+                stdout=io.StringIO(),
+                stderr=io.StringIO(),
+            ),
+            0,
+        )
+
+        self.assertEqual(
+            hook.tag(
+                ["--session", "conv-1", "--tag", "work_type=feature"],
+                env=self.env,
+                stdout=io.StringIO(),
+                stderr=io.StringIO(),
+            ),
+            0,
+        )
+
+        body = hook.build_request(payload(), env=self.env)
+        record = body["resourceLogs"][0]["scopeLogs"][0]["logRecords"][0]
+        tagged = attributes(record["attributes"])
+
+        self.assertEqual(tagged["vantage.classification.work_type"], "feature")
+        self.assertEqual(tagged["vantage.classification.project"], "Customer project")
+        self.assertEqual(tagged["vantage.classification.department"], "engineering")
+        self.assertEqual(tagged["vantage.classification.classifier_version"], "v2")
+
+    def test_rejects_invalid_custom_tags(self):
+        for value in ("missing-equals", "Department=engineering", "department=line\nbreak"):
+            status = hook.tag(
+                ["--session", "conv-1", "--tag", value],
+                env=self.env,
+                stdout=io.StringIO(),
+                stderr=io.StringIO(),
+            )
+
+            self.assertEqual(status, 1)
+
 
 class CredentialsTest(HookTestCase):
     def test_team_plugin_token_wins_over_environment_and_file(self):
@@ -217,6 +270,54 @@ class MainTest(HookTestCase):
         self.assertEqual(hook.main(stdin=io.StringIO("not json"), stdout=stdout, stderr=io.StringIO(), env=self.env), 0)
         self.assertEqual(stdout.getvalue(), "{}\n")
 
+    def test_session_start_refreshes_and_injects_the_account_classifier(self):
+        self.write_config({"classifier_token": "vntg_cr_customer"})
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = json.dumps(
+            {"classifier_markdown": "# Customer classifier\n"}
+        ).encode("utf-8")
+        response.headers = {"ETag": '"current"'}
+        opener = mock.Mock()
+        opener.open.return_value = response
+        stdout = io.StringIO()
+
+        with mock.patch.object(hook.urllib.request, "build_opener", return_value=opener):
+            code = hook.main(
+                stdin=io.StringIO(
+                    json.dumps(
+                        {"hook_event_name": "sessionStart", "session_id": "session-1"}
+                    )
+                ),
+                stdout=stdout,
+                stderr=io.StringIO(),
+                env=self.env,
+            )
+            with mock.patch.object(hook.subprocess, "Popen") as refresh:
+                warm_context = hook.session_start({"session_id": "session-2"}, env=self.env)
+
+        self.assertEqual(code, 0)
+        context = json.loads(stdout.getvalue())["additional_context"]
+        self.assertIn("classifier.md", context)
+        self.assertIn("tag --session session-1", context)
+        self.assertIn("tag --session session-2", warm_context)
+        refresh.assert_called_once()
+        self.assertEqual(refresh.call_args.args[0][-1], "--refresh-classifier")
+        opener.open.assert_called_once()
+        with open(hook.classifier_markdown_path(self.env), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "# Customer classifier\n")
+        request = opener.open.call_args.args[0]
+        self.assertEqual(request.full_url, "https://api.vantage.sh/plugins/classifier")
+        self.assertEqual(
+            opener.open.call_args.kwargs["timeout"],
+            hook.CLASSIFIER_TIMEOUT,
+        )
+        self.assertEqual(request.get_header("Authorization"), "Bearer vntg_cr_customer")
+        self.assertEqual(
+            os.stat(hook.classifier_markdown_path(self.env)).st_mode & 0o777,
+            0o600,
+        )
+
     def test_records_source_and_result_without_the_token(self):
         with FakeServer(default=(401, {})) as server:
             env = dict(self.env, VANTAGE_CURSOR_TEAM_TOKEN="vntg_ti_team", VANTAGE_CURSOR_INGEST_ENDPOINT=server.url)
@@ -228,17 +329,51 @@ class MainTest(HookTestCase):
         self.assertEqual((recorded["source"], recorded["result"]), ("team", 401))
         self.assertNotIn("vntg_ti_team", json.dumps(recorded))
 
-    def run_hook_command(self, env):
+    def run_hook_command(self, env, reply=None):
+        reply = payload() if reply is None else reply
         with open(os.path.join(ROOT, "hooks", "hooks.json")) as handle:
-            command = json.load(handle)["hooks"]["afterAgentResponse"][0]["command"]
+            command = json.load(handle)["hooks"][reply["hook_event_name"]][0]["command"]
         return subprocess.run(
             ["sh", "-c", command],
             cwd=ROOT,
-            input=json.dumps(payload()).encode("utf-8"),
+            input=json.dumps(reply).encode("utf-8"),
             env=env,
             capture_output=True,
             check=True,
         )
+
+    def test_session_start_uses_the_team_token_and_isolates_its_cache(self):
+        self.write_config({"classifier_token": "vntg_cr_individual"})
+        reply = {"hook_event_name": "sessionStart", "session_id": "team-session"}
+        responses = [
+            (200, {"classifier_markdown": "# Team classifier\n"}),
+            (503, {}),
+            (401, {}),
+        ]
+        with FakeServer(responses=responses) as server:
+            env = dict(
+                self.env,
+                VANTAGE_TELEMETRY_TOKEN="vntg_ti_team",
+                VANTAGE_CLASSIFIER_TOKEN="vntg_cr_team",
+                VANTAGE_CLASSIFIER_ENDPOINT=server.url + "/plugins/classifier",
+            )
+            completed = self.run_hook_command(env, reply)
+            rotated = self.run_hook_command(dict(env, VANTAGE_CLASSIFIER_TOKEN="vntg_cr_replacement"), reply)
+            hook_env = dict(
+                env,
+                VANTAGE_CURSOR_TEAM_TOKEN=env["VANTAGE_TELEMETRY_TOKEN"],
+                VANTAGE_CURSOR_TEAM_CLASSIFIER_TOKEN=env["VANTAGE_CLASSIFIER_TOKEN"],
+            )
+            team_cache = hook.classifier_settings(hook_env)[2]
+            self.assertTrue(os.path.isfile(team_cache))
+            hook.main(["--refresh-classifier"], env=hook_env)
+
+        self.assertEqual(server.requests[0]["headers"]["Authorization"], "Bearer vntg_cr_team")
+        self.assertEqual(server.requests[1]["headers"]["Authorization"], "Bearer vntg_cr_replacement")
+        self.assertIn("additional_context", json.loads(completed.stdout))
+        self.assertNotIn(b"vntg_cr_team", completed.stdout + completed.stderr)
+        self.assertEqual(json.loads(rotated.stdout), {})
+        self.assertFalse(os.path.exists(team_cache))
 
     def test_hook_command_passes_the_team_variable_to_the_hook(self):
         with FakeServer() as server:
@@ -247,6 +382,28 @@ class MainTest(HookTestCase):
 
         self.assertEqual(completed.stdout, b"{}\n")
         self.assertEqual(server.requests[0]["headers"]["Authorization"], "Bearer vntg_ti_team")
+
+    def test_team_usage_needs_a_team_classifier_to_add_custom_tags(self):
+        self.write_config({"token": "vntg_ti_personal", "classifier_token": "vntg_cr_personal"})
+        hook.update_tags(self.env, "conv-1", {"project": "checkout"})
+        with FakeServer() as server:
+            env = dict(
+                self.env,
+                VANTAGE_TELEMETRY_TOKEN="vntg_ti_team",
+                VANTAGE_CURSOR_INGEST_ENDPOINT=server.url,
+                VANTAGE_CLASSIFIER_ENDPOINT=server.url + "/plugins/classifier",
+            )
+            start = {"hook_event_name": "sessionStart", "session_id": "conv-1"}
+            self.assertEqual(self.run_hook_command(env, start).stdout, b"{}\n")
+            self.assertEqual(server.requests, [])
+
+            self.run_hook_command(env)
+            reply = dict(payload(), generation_id="gen-2")
+            self.run_hook_command(dict(env, VANTAGE_CLASSIFIER_TOKEN="vntg_cr_team"), reply)
+
+        records = [request["body"]["resourceLogs"][0]["scopeLogs"][0]["logRecords"][0] for request in server.requests]
+        self.assertNotIn("vantage.classification.project", attributes(records[0]["attributes"]))
+        self.assertEqual(attributes(records[1]["attributes"])["vantage.classification.project"], "checkout")
 
     def test_hook_command_falls_back_when_the_team_variable_is_unset(self):
         with FakeServer() as server:
