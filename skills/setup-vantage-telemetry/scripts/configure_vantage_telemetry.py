@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import secrets
+import shutil
 import sys
 import tempfile
 import time
@@ -25,9 +26,10 @@ DEFAULT_CLAIM_ENDPOINT = "https://api.vantage.sh/plugins/cursor_telemetry_setup/
 DEFAULT_INGEST_ENDPOINT = "https://ingest.vantage.sh"
 LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
 # The ingest endpoint rejects urllib's default User-Agent.
-USER_AGENT = "vantage-cursor-plugin/1.1.0"
+USER_AGENT = "vantage-cursor-plugin/1.2.0"
 SIGN_IN_TIMEOUT = 600
 REQUEST_TIMEOUT = 15
+MAX_CLASSIFIER_BYTES = 64 * 1024
 
 
 class SetupError(Exception):
@@ -43,6 +45,15 @@ def config_path(env=os.environ):
     else:
         base = env.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
     return os.path.join(base, "vantage", "cursor-telemetry.json")
+
+
+def classifier_markdown_path(env=os.environ):
+    configured = env.get("VANTAGE_CURSOR_CLASSIFIER_PATH", "")
+    return configured or os.path.join(os.path.dirname(config_path(env)), "classifier.md")
+
+
+def classifier_etag_path(env=os.environ):
+    return classifier_markdown_path(env) + ".etag"
 
 
 def read_config(env=os.environ):
@@ -70,6 +81,34 @@ def write_config(config, env=os.environ):
             os.unlink(temporary)
         raise
     return path
+
+
+def write_private_file(path, content):
+    directory = os.path.dirname(path)
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(dir=directory, prefix=".%s." % os.path.basename(path))
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(content)
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+    except BaseException:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+        raise
+
+
+def classifier_bundle(payload):
+    token = payload.get("classifier_read_token")
+    markdown = payload.get("classifier_markdown")
+    if not isinstance(token, str) or not token.strip():
+        return None
+    if not isinstance(markdown, str) or not markdown.strip():
+        return None
+    encoded = markdown.encode("utf-8")
+    if len(encoded) > MAX_CLASSIFIER_BYTES:
+        return None
+    return {"token": token.strip(), "markdown": encoded}
 
 
 def secure_url(url, purpose):
@@ -129,7 +168,7 @@ def post_json(url, body, headers=None, timeout=REQUEST_TIMEOUT):
     return status, parsed if isinstance(parsed, dict) else {}
 
 
-def wait_for_ingest_token(claim_url, verifier, timeout=SIGN_IN_TIMEOUT, sleep=time.sleep, clock=time.monotonic):
+def wait_for_setup_credentials(claim_url, verifier, timeout=SIGN_IN_TIMEOUT, sleep=time.sleep, clock=time.monotonic):
     deadline = clock() + timeout
     delay = 2.0
     while True:
@@ -141,7 +180,10 @@ def wait_for_ingest_token(claim_url, verifier, timeout=SIGN_IN_TIMEOUT, sleep=ti
         if status == 201:
             token = body.get("plaintext_token")
             if isinstance(token, str) and token.strip():
-                return token.strip()
+                return {
+                    "ingest_token": token.strip(),
+                    "classifier": classifier_bundle(body),
+                }
             raise SetupError("Vantage approved the sign-in but returned no token. Run setup again.")
         if status == 403:
             raise SetupError("The Vantage sign-in was denied. Ask a Vantage admin for integration settings access.")
@@ -250,6 +292,20 @@ def remove(env=os.environ, out=sys.stdout):
         out.write("Revoke it in Vantage under Settings > Integrations > Cursor Telemetry if it is no longer needed.\n")
     else:
         out.write("No saved Vantage telemetry token was found.\n")
+    removed_classifier = False
+    for classifier_path in (classifier_markdown_path(env), classifier_etag_path(env)):
+        try:
+            os.unlink(classifier_path)
+            removed_classifier = True
+        except FileNotFoundError:
+            pass
+    try:
+        shutil.rmtree(os.path.join(os.path.dirname(path), "team-classifier-cache"))
+        removed_classifier = True
+    except FileNotFoundError:
+        pass
+    if removed_classifier:
+        out.write("Removed the cached Vantage classifier.\n")
     if team_configured(env):
         out.write("Your Cursor team admin set a Vantage telemetry token for the plugin, so telemetry keeps sending. ")
         out.write("Your admin manages that in the Cursor dashboard.\n")
@@ -259,9 +315,10 @@ def remove(env=os.environ, out=sys.stdout):
     return 0
 
 
-def setup(env=os.environ, out=sys.stdout, force=False, open_browser=webbrowser.open, wait=wait_for_ingest_token):
+def setup(env=os.environ, out=sys.stdout, force=False, open_browser=webbrowser.open, wait=wait_for_setup_credentials):
     token, _endpoint, source = active_credentials(env)
-    if token and not force:
+    config = read_config(env)
+    if token and not force and (source != config_path(env) or "classifier_token" in config):
         out.write("Vantage telemetry is already set up (from %s). Checking it now.\n" % source)
         return status(env, out)
     recorded = team_configured(env)
@@ -282,12 +339,27 @@ def setup(env=os.environ, out=sys.stdout, force=False, open_browser=webbrowser.o
     except Exception:  # noqa: BLE001 - the printed link still works without a browser
         pass
 
-    token = wait(urls["claim"], verifier)
+    credentials = wait(urls["claim"], verifier)
+    token = credentials["ingest_token"]
     ok, message = verify_ingest_token(token, urls["ingest"])
     if not ok:
         raise SetupError(message)
 
-    path = write_config({"token": token, "endpoint": urls["ingest"]}, env)
+    classifier = credentials["classifier"]
+    if classifier:
+        write_private_file(classifier_markdown_path(env), classifier["markdown"])
+        try:
+            os.unlink(classifier_etag_path(env))
+        except FileNotFoundError:
+            pass
+    path = write_config(
+        {
+            "token": token,
+            "endpoint": urls["ingest"],
+            "classifier_token": classifier["token"] if classifier else None,
+        },
+        env,
+    )
     out.write("%s Saved it to %s (readable only by you).\n" % (message, path))
     out.write("Cursor now sends each local agent reply's model, token counts, repository, pull request, and ticket ")
     out.write("to Vantage Tokenomics. No prompt or response text is sent.\n")

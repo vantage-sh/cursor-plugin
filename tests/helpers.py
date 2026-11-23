@@ -24,7 +24,7 @@ class FakeServer:
         server = self
 
         class Handler(BaseHTTPRequestHandler):
-            def do_POST(self):
+            def respond(self):
                 length = int(self.headers.get("Content-Length") or 0)
                 raw = self.rfile.read(length)
                 server.requests.append(
@@ -37,6 +37,9 @@ class FakeServer:
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
                 self.wfile.write(payload)
+
+            do_GET = respond
+            do_POST = respond
 
             def log_message(self, *_args):
                 pass
